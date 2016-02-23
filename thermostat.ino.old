@@ -4,7 +4,7 @@
  * Connexion Wifi 
  * Connexion MQTT (IO Adafruit)
  * Connexion NTP 
- * Capteur DHT11/22
+ * Capteur DHT11
  ****************************************************/
 
 // Libraries
@@ -15,15 +15,9 @@
 
 #include <ntp-client.h>
 
-// Config DHT 11/22 sensor
+// Config DHT 11 sensor
 #define DHTPIN 5
-#define DHTTYPE DHT11
-
-// DEFINE relay pin
-#define RELAY 0
-
-int thermostat_value=10; // default 10°C
-int room_temperature=11;
+#define DHTTYPE DHT22
 
 // Config WiFi parameters
 #define WLAN_SSID       "Livebox-79ca"
@@ -35,19 +29,12 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 IPAddress timeServer(129, 6, 15, 28); // time.nist.gov NTP server
 
 // Config Adafruit IO
-/*
 #define AIO_SERVER      "io.adafruit.com"
 #define AIO_SERVERPORT  1883
 #define AIO_USERNAME    "jpinon"
 #define AIO_KEY         "78f2cc8dde492223bcb1d15fc24b0d4da0df66e0"
-*/
-#define AIO_SERVER      "192.168.1.10"
-#define AIO_SERVERPORT  1883
-#define AIO_USERNAME    ""
-#define AIO_KEY         ""
-#define AIO_ID          "CHAMB_2"
 
-// DHT sensor and temperature variables
+// DHT sensor
 DHT dht(DHTPIN, DHTTYPE, 15);
 
 // Functions
@@ -70,21 +57,15 @@ const char MQTT_PASSWORD[] PROGMEM  = AIO_KEY;
 Adafruit_MQTT_Client mqtt(&client, MQTT_SERVER, AIO_SERVERPORT, MQTT_CLIENTID, MQTT_USERNAME, MQTT_PASSWORD);/****************************** Feeds ***************************************/
 
 // Setup feeds for temperature & humidity
-const char TEMPERATURE_FEED[] PROGMEM = AIO_USERNAME "/feeds/"AIO_ID"/temp";
+const char TEMPERATURE_FEED[] PROGMEM = AIO_USERNAME "/feeds/temp_ch1";
 Adafruit_MQTT_Publish temperature = Adafruit_MQTT_Publish(&mqtt, TEMPERATURE_FEED);
 
-const char HUMIDITY_FEED[] PROGMEM = AIO_USERNAME "/feeds/"AIO_ID"/humid";
+const char HUMIDITY_FEED[] PROGMEM = AIO_USERNAME "/feeds/humid_ch1";
 Adafruit_MQTT_Publish humidity = Adafruit_MQTT_Publish(&mqtt, HUMIDITY_FEED);
-
-const char TIME_FEED[] PROGMEM = AIO_USERNAME "/feeds/"AIO_ID"/time";
-Adafruit_MQTT_Publish mqtime = Adafruit_MQTT_Publish(&mqtt, TIME_FEED);
-
-const char THERMO_FEED[] PROGMEM = AIO_USERNAME "/feeds/"AIO_ID"/thermostat/status";
-Adafruit_MQTT_Publish thermo_status = Adafruit_MQTT_Publish(&mqtt, THERMO_FEED);
 
 // Setup a feed called 'thermostat' for subscribing to changes.
 // Notice MQTT paths for AIO follow the form: <username>/feeds/<feedname>
-const char THERMOSTAT_FEED[] PROGMEM = AIO_USERNAME "/feeds/"AIO_ID"/thermostat/set";
+const char THERMOSTAT_FEED[] PROGMEM = AIO_USERNAME "/feeds/thermostat";
 Adafruit_MQTT_Subscribe thermostat = Adafruit_MQTT_Subscribe(&mqtt, THERMOSTAT_FEED);
 
 /*************************** Sketch Code ************************************/
@@ -118,32 +99,28 @@ void setup() {
   ntpServer = new ntp(localPort,timeServer);
   Serial.println (ntpServer->epochTimeString());
   //delay(1000);
-  // listen for events on the lamp feed
-  mqtt.subscribe(&thermostat);
   // connect to adafruit io
   connect();
-  pinMode(RELAY,OUTPUT);  
+  // listen for events on the lamp feed
+  mqtt.subscribe(&thermostat);
+  
 }
 
 unsigned int t=1000000; // index of mesures
 // log every (in millis)
-#define INTERVAL (6*1000) 
+#define INTERVAL (2*60*1000) 
 
 
 void loop() {
-  if (room_temperature<thermostat_value) {
-     digitalWrite(RELAY,LOW);
-  } else {
-     digitalWrite(RELAY,HIGH);
-  }
-  
   Adafruit_MQTT_Subscribe *subscription;
+  
   // ping adafruit io a few times to make sure we remain connected
   if(! mqtt.ping(3)) {
-    // reconnect to adafruit io    if(! mqtt.connected())
+    // reconnect to adafruit io
+    if(! mqtt.connected())
       connect();
   }
-
+  
   // 
   // this is our 'wait for incoming subscription packets' busy subloop
   while (subscription = mqtt.readSubscription(1000)) {
@@ -153,54 +130,49 @@ void loop() {
 
       // convert mqtt ascii payload to int
       char *value = (char *)thermostat.lastread;
-      Serial.print(F("Received thermostat: "));
+      Serial.print(F("Received: "));
       Serial.println(value);
-      thermostat_value=atoi(value);
-      // feed back thermostat has changed
-      thermo_status.publish(thermostat_value);
+      
     }
 
   }
     
-  // every interval acquire time for logs purposes
+  // every interval acquire temp for logs purposes
   if ((millis()/INTERVAL)!=t) {
-    Serial.print (ntpServer->epochTimeString());
-    Serial.print (": ");
+    Serial.println (ntpServer->epochTimeString());
     t=millis()/INTERVAL;
   
     // Grab the current state of the sensor
-    float humidity_data = (float)dht.readHumidity();
+    //int humidity_data = (int)dht.readHumidity();
+    float humidity_data = dht.readHumidity();
     Serial.print(F("Humidity:"));
-    Serial.print(humidity_data);
-    float temperature_data = (float)dht.readTemperature();
-    Serial.print(F(" Temperature:"));
-    Serial.print(temperature_data);
-    char bufferstr[30];
-    ntpServer->epochTimeString().toCharArray(bufferstr, 30);
-    mqtime.publish(bufferstr);
+    Serial.println(humidity_data);
+    //int temperature_data = (int)dht.readTemperature();
+    float temperature_data = dht.readTemperature();
+    Serial.print(F("Temperature:"));
+    Serial.println(temperature_data);
+  
     if ((temperature_data>-20) && (temperature_data<100)) {
       // Publish data
-      room_temperature=temperature_data;
       if (! temperature.publish(temperature_data))
-        Serial.print(F(" Failed to publish temperature"));
+        Serial.println(F("Failed to publish temperature"));
       else
-        Serial.print(F(" Temperature published!"));
+        Serial.println(F("Temperature published!"));
     }
       
     if ((humidity_data>=0) && (temperature_data<=100)) {
       if (! humidity.publish(humidity_data))
-        Serial.print(F(" Failed to publish humidity"));
+        Serial.println(F("Failed to publish humidity"));
       else
-        Serial.print(F( "Humidity published!"));    
+        Serial.println(F("Humidity published!"));    
     }
-    Serial.println();
   }
 }
 
 // connect to adafruit io via MQTT
 void connect() {
 
-  Serial.print(F("Connecting MQTT server ("AIO_SERVER") ... "));
+  Serial.print(F("Connecting to Adafruit IO... "));
 
   int8_t ret;
 
@@ -224,6 +196,6 @@ void connect() {
 
   }
 
-  Serial.println(F("MQTT server Connected!"));
+  Serial.println(F("Adafruit IO Connected!"));
 
 }
